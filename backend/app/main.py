@@ -1,10 +1,15 @@
 import os
+import io
 import re
 import secrets
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+
+import httpx
+from pydantic import BaseModel
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -89,6 +94,46 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok", "transcription_model": TRANSCRIPTION_MODEL}
+
+class OpenAIFileRef(BaseModel):
+    name: str
+    id: str
+    mime_type: str
+    download_link: str
+
+
+class GPTFileRequest(BaseModel):
+    openaiFileIdRefs: list[OpenAIFileRef]
+
+
+@app.post("/v1/transcribe-from-gpt")
+async def transcribe_from_gpt(
+    payload: GPTFileRequest,
+    _authorized: bool = Depends(require_api_token),
+):
+    if not payload.openaiFileIdRefs:
+        raise HTTPException(400, "Nenhum vídeo foi anexado à solicitação.")
+    if len(payload.openaiFileIdRefs) > 1:
+        raise HTTPException(400, "Envie apenas um vídeo por edição.")
+    file_ref = payload.openaiFileIdRefs[0]
+    parsed = urlparse(file_ref.download_link)
+    if parsed.scheme != "https" or parsed.hostname != "files.oaiusercontent.com":
+        raise HTTPException(400, "Link de arquivo não permitido.")
+    suffix = Path(file_ref.name).suffix.lower()
+    if suffix not in {".mp4", ".mov", ".m4v", ".webm"} or not file_ref.mime_type.startswith("video/"):
+        raise HTTPException(400, "O arquivo anexado precisa ser um vídeo MP4, MOV, M4V ou WEBM.")
+    try:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
+            response = await client.get(file_ref.download_link)
+            response.raise_for_status()
+            content = response.content
+    except httpx.HTTPError:
+        raise HTTPException(502, "Não foi possível baixar o vídeo anexado ao ChatGPT. Tente anexá-lo novamente.")
+    if len(content) > MAX_VIDEO_BYTES:
+        raise HTTPException(413, "Vídeo excede o limite configurado de 200 MB.")
+    uploaded = UploadFile(filename=file_ref.name, file=io.BytesIO(content))
+    return await transcribe_video(uploaded, _authorized=True)
+
 
 @app.post("/v1/transcribe")
 async def transcribe_video(
