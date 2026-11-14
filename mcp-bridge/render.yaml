@@ -1,0 +1,19 @@
+# Render configuration for the separate HITMO MCP Bridge service.
+# Create this as a separate Web Service with Root Directory = mcp-bridge.
+services:
+  - type: web
+    name: hitmo-video-ai-mcp
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    healthCheckPath: /health
+    envVars:
+      - key: HITMO_API_BASE_URL
+        value: https://hitmo-video-ai.onrender.com
+      - key: HITMO_API_TOKEN
+        sync: false
+      - key: MCP_ACCESS_TOKEN
+        sync: false
+      - key: MAX_VIDEO_BYTES
+        value: "209715200"
