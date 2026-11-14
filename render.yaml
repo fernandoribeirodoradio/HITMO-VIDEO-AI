@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: hitmo-voice-video-editor
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TRANSCRIPTION_MODEL
+        value: whisper-1
+      - key: MAX_VIDEO_BYTES
+        value: "209715200"
