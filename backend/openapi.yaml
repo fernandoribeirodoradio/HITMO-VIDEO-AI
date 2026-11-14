@@ -14,6 +14,38 @@ paths:
       responses:
         "200":
           description: Serviço disponível
+  /v1/transcribe-from-gpt:
+    post:
+      operationId: transcribeVideoFromGPT
+      summary: Transcrever vídeo anexado nesta conversa
+      description: Recebe a referência de um único vídeo anexado pelo usuário ao ChatGPT. O campo openaiFileIdRefs é preenchido pelo ChatGPT com objetos contendo name, id, mime_type e download_link. Os links duram poucos minutos.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - openaiFileIdRefs
+              properties:
+                openaiFileIdRefs:
+                  type: array
+                  items:
+                    type: string
+                  description: Referências dos arquivos de vídeo anexados pelo usuário; preenchidas pelo ChatGPT.
+      responses:
+        "200":
+          description: Transcrição, segmentos temporizados, legendas SRT e comandos de voz detectados.
+        "400":
+          description: Arquivo ausente ou tipo não suportado.
+        "401":
+          description: Token Bearer ausente.
+        "403":
+          description: Token inválido.
+        "502":
+          description: Não foi possível baixar o arquivo temporário.
   /v1/transcribe:
     post:
       operationId: transcribeVideo
