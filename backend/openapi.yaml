@@ -1,0 +1,95 @@
+openapi: 3.1.0
+info:
+  title: HITMO VIDEO AI
+  version: 0.2.0
+  description: API experimental para transcrever vídeos e detectar comandos de voz.
+servers:
+  - url: https://SEU-SERVICO.onrender.com
+    description: Substitua pelo endereço gerado no Render.
+paths:
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Verificar se a API está online
+      responses:
+        "200":
+          description: Serviço disponível
+  /v1/transcribe:
+    post:
+      operationId: transcribeVideo
+      summary: Enviar vídeo para transcrição e identificação de comandos
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - video
+              properties:
+                video:
+                  type: string
+                  format: binary
+                  description: Arquivo MP4, MOV, M4V ou WEBM (máximo 200 MB).
+      responses:
+        "200":
+          description: Transcrição, legendas SRT e comandos detectados.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  model:
+                    type: string
+                  language:
+                    type: string
+                  text:
+                    type: string
+                  segments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        start:
+                          type: number
+                        end:
+                          type: number
+                        text:
+                          type: string
+                  subtitles_srt:
+                    type: string
+                  voice_commands:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        start:
+                          type: number
+                        end:
+                          type: number
+                        phrase:
+                          type: string
+                        effect:
+                          type: string
+                        suggestion:
+                          type: string
+                        status:
+                          type: string
+        "401":
+          description: Token Bearer ausente.
+        "403":
+          description: Token inválido.
+        "413":
+          description: Vídeo ou áudio excede o limite.
+        "503":
+          description: Token ou chave OpenAI não configurados.
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
