@@ -1,7 +1,7 @@
 FROM debian:bookworm-slim AS whisper-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates cmake build-essential git curl \
+    ca-certificates cmake build-essential git curl coreutils \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git /opt/whisper.cpp \
@@ -10,9 +10,10 @@ RUN git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git /opt/whisper
     && cmake --build /opt/whisper.cpp/build --config Release -j2 \
     && cmake --install /opt/whisper.cpp/build --prefix /opt/whisper-install \
     && mkdir -p /opt/whisper/models \
-    && curl -L --fail --retry 3 \
-       https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin \
-       -o /opt/whisper/models/ggml-tiny-q5_1.bin
+    && curl -L --fail --retry 5 --retry-all-errors \
+       "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin?download=true" \
+       -o /opt/whisper/models/ggml-tiny-q5_1.bin \
+    && echo "2827a03e495b1ed3048ef28a6a4620537db4ee51  /opt/whisper/models/ggml-tiny-q5_1.bin" | sha1sum -c -
 
 FROM python:3.11-slim
 
@@ -28,7 +29,8 @@ COPY --from=whisper-builder /opt/whisper-install /opt/whisper-install
 COPY --from=whisper-builder /opt/whisper/models /opt/whisper/models
 RUN find /opt/whisper-install -type f -name 'lib*.so*' -exec cp -P {} /usr/local/lib/ \; \
     && ldconfig \
-    && test -x /opt/whisper-install/bin/whisper-cli
+    && test -x /opt/whisper-install/bin/whisper-cli \
+    && test -s /opt/whisper/models/ggml-tiny-q5_1.bin
 
 COPY app ./app
 
