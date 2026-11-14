@@ -9,6 +9,8 @@ services:
     envVars:
       - key: OPENAI_API_KEY
         sync: false
+      - key: HITMO_API_TOKEN
+        sync: false
       - key: TRANSCRIPTION_MODEL
         value: whisper-1
       - key: MAX_VIDEO_BYTES
