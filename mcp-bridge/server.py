@@ -1,4 +1,5 @@
-import hmac
+import base64
+import hashlib
 import json
 import os
 import re
@@ -9,15 +10,20 @@ from urllib.parse import urlparse
 
 import httpx
 from fastmcp import FastMCP
+from fastmcp.server.auth.providers.github import GitHubProvider
+from key_value.aio.stores.redis import RedisStore
+from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
+from cryptography.fernet import Fernet
 from pydantic import BaseModel, ConfigDict, Field
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
 from starlette.responses import JSONResponse
 import uvicorn
 
 API_BASE_URL = os.getenv("HITMO_API_BASE_URL", "https://hitmo-video-ai.onrender.com").rstrip("/")
 API_TOKEN = os.getenv("HITMO_API_TOKEN", "")
-MCP_ACCESS_TOKEN = os.getenv("MCP_ACCESS_TOKEN", "")
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
+GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
+REDIS_URL = os.getenv("REDIS_URL", "")
+JWT_SIGNING_KEY = os.getenv("JWT_SIGNING_KEY", "")
 MAX_VIDEO_BYTES = int(os.getenv("MAX_VIDEO_BYTES", str(200 * 1024 * 1024)))
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm"}
 ALLOWED_MIME_TYPES = {
@@ -26,7 +32,17 @@ ALLOWED_MIME_TYPES = {
 }
 ALLOWED_FILE_HOST = "files.oaiusercontent.com"
 
-mcp = FastMCP("HITMO VIDEO AI — Editor Inteligente")
+def _build_auth_provider() -> GitHubProvider:
+    required = {"GITHUB_CLIENT_ID": GITHUB_CLIENT_ID, "GITHUB_CLIENT_SECRET": GITHUB_CLIENT_SECRET, "REDIS_URL": REDIS_URL, "JWT_SIGNING_KEY": JWT_SIGNING_KEY}
+    missing = [name for name, value in required.items() if not value]
+    if missing:
+        raise RuntimeError("Configure no Render as variáveis: " + ", ".join(missing))
+    encryption_key = base64.urlsafe_b64encode(hashlib.sha256(("HITMO_VIDEO_AI_STORAGE:" + JWT_SIGNING_KEY).encode("utf-8")).digest())
+    storage = FernetEncryptionWrapper(key_value=RedisStore(url=REDIS_URL), fernet=Fernet(encryption_key))
+    return GitHubProvider(client_id=GITHUB_CLIENT_ID, client_secret=GITHUB_CLIENT_SECRET, base_url="https://hitmo-video-ai-1.onrender.com", jwt_signing_key=JWT_SIGNING_KEY, client_storage=storage)
+
+
+mcp = FastMCP("HITMO VIDEO AI — Editor Inteligente", auth=_build_auth_provider())
 
 
 class ChatGPTFile(BaseModel):
@@ -63,8 +79,6 @@ def _validate_file(file: ChatGPTFile) -> tuple[str, str]:
 def _require_config() -> None:
     if not API_TOKEN:
         raise RuntimeError("O segredo HITMO_API_TOKEN não está configurado no serviço MCP.")
-    if not MCP_ACCESS_TOKEN:
-        raise RuntimeError("O segredo MCP_ACCESS_TOKEN não está configurado no serviço MCP.")
 
 
 def _safe_api_error(response: httpx.Response) -> str:
@@ -122,19 +136,6 @@ async def _post_transcription_response(response: httpx.Response) -> dict[str, An
     except ValueError as exc:
         raise RuntimeError("A API HITMO não retornou JSON válido.") from exc
     return _validate_transcription(payload)
-
-
-class MCPBearerMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        if request.url.path == "/health":
-            return await call_next(request)
-        if not MCP_ACCESS_TOKEN:
-            return JSONResponse({"error": "MCP_ACCESS_TOKEN não configurado."}, status_code=503)
-        auth = request.headers.get("authorization", "")
-        scheme, _, supplied = auth.partition(" ")
-        if scheme.lower() != "bearer" or not supplied or not hmac.compare_digest(supplied, MCP_ACCESS_TOKEN):
-            return JSONResponse({"error": "Autenticação Bearer obrigatória ou inválida."}, status_code=401)
-        return await call_next(request)
 
 
 @mcp.tool(
@@ -233,7 +234,6 @@ async def transcribe_chatgpt_file(file: ChatGPTFile) -> dict[str, Any]:
 
 
 app = mcp.http_app(path="/mcp", stateless_http=True)
-app.add_middleware(MCPBearerMiddleware)
 
 
 async def health_route(request: Request):
@@ -244,6 +244,6 @@ app.add_route("/health", health_route, methods=["GET"])
 
 
 if __name__ == "__main__":
-    if not API_TOKEN or not MCP_ACCESS_TOKEN:
-        raise SystemExit("Configure HITMO_API_TOKEN e MCP_ACCESS_TOKEN no ambiente antes de iniciar.")
+    if not API_TOKEN:
+        raise SystemExit("Configure HITMO_API_TOKEN no ambiente antes de iniciar.")
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
