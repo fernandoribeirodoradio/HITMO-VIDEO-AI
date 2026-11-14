@@ -1,12 +1,13 @@
 import os
 import re
-import shutil
+import secrets
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 
@@ -25,6 +26,18 @@ app.add_middleware(
 )
 
 MAX_VIDEO_BYTES = int(os.getenv("MAX_VIDEO_BYTES", str(200 * 1024 * 1024)))
+API_TOKEN = os.getenv("HITMO_API_TOKEN", "")
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def require_api_token(credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme)):
+    if not API_TOKEN:
+        raise HTTPException(status_code=503, detail="HITMO_API_TOKEN não configurado no servidor.")
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Token Bearer obrigatório.")
+    if not secrets.compare_digest(credentials.credentials, API_TOKEN):
+        raise HTTPException(status_code=403, detail="Token inválido.")
+    return True
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "whisper-1")
 
 COMMANDS = [
@@ -78,7 +91,10 @@ def health():
     return {"status": "ok", "transcription_model": TRANSCRIPTION_MODEL}
 
 @app.post("/v1/transcribe")
-async def transcribe_video(video: UploadFile = File(...)):
+async def transcribe_video(
+    video: UploadFile = File(...),
+    _authorized: bool = Depends(require_api_token),
+):
     if not video.filename or Path(video.filename).suffix.lower() not in {".mp4", ".mov", ".m4v", ".webm"}:
         raise HTTPException(400, "Envie um vídeo MP4, MOV, M4V ou WEBM.")
     if not os.getenv("OPENAI_API_KEY"):
