@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -15,6 +16,7 @@ from key_value.aio.stores.redis import RedisStore
 from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 from cryptography.fernet import Fernet
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 import uvicorn
@@ -25,6 +27,7 @@ GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
 REDIS_URL = os.getenv("REDIS_URL", "")
 JWT_SIGNING_KEY = os.getenv("JWT_SIGNING_KEY", "")
+MCP_ACCESS_TOKEN = os.getenv("MCP_ACCESS_TOKEN", "")
 MAX_VIDEO_BYTES = int(os.getenv("MAX_VIDEO_BYTES", str(200 * 1024 * 1024)))
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm"}
 ALLOWED_MIME_TYPES = {
@@ -43,7 +46,8 @@ def _build_auth_provider() -> GitHubProvider:
     return GitHubProvider(client_id=GITHUB_CLIENT_ID, client_secret=GITHUB_CLIENT_SECRET, base_url="https://hitmo-video-ai-1.onrender.com", jwt_signing_key=JWT_SIGNING_KEY, client_storage=storage)
 
 
-mcp = FastMCP("HITMO VIDEO AI — Editor Inteligente", auth=_build_auth_provider())
+OAUTH_CONFIGURED = all([GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, REDIS_URL, JWT_SIGNING_KEY])
+mcp = FastMCP("HITMO VIDEO AI — Editor Inteligente", auth=_build_auth_provider() if OAUTH_CONFIGURED else None)
 
 
 class ChatGPTFile(BaseModel):
@@ -235,6 +239,22 @@ async def transcribe_chatgpt_file(file: ChatGPTFile) -> dict[str, Any]:
 
 
 app = mcp.http_app(path="/mcp", stateless_http=True)
+
+
+class MCPBearerMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path == "/health" or OAUTH_CONFIGURED:
+            return await call_next(request)
+        if not MCP_ACCESS_TOKEN:
+            return JSONResponse({"error": "Autenticação ainda não configurada."}, status_code=503)
+        auth = request.headers.get("authorization", "")
+        scheme, _, supplied = auth.partition(" ")
+        if scheme.lower() != "bearer" or not supplied or not hmac.compare_digest(supplied, MCP_ACCESS_TOKEN):
+            return JSONResponse({"error": "Autenticação Bearer obrigatória ou inválida."}, status_code=401)
+        return await call_next(request)
+
+
+app.add_middleware(MCPBearerMiddleware)
 
 
 async def health_route(request: Request):
