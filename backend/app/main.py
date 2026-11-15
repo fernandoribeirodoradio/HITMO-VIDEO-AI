@@ -256,3 +256,67 @@ async def transcribe_video(
             "voice_commands": detect_commands(segments),
             "note": "Transcrição gratuita com Whisper.cpp. A renderização/inserção dos efeitos no MP4 ainda não está implementada."
         }
+
+
+# Edição local: vídeo + arquivo de instruções, sem API paga de GPT.
+import shutil
+from starlette.background import BackgroundTask
+from fastapi.responses import FileResponse
+from .editor import render_video
+
+
+@app.post("/v1/edit")
+async def edit_video(
+    video: UploadFile = File(...),
+    instructions: UploadFile | None = File(default=None),
+    _authorized: bool = Depends(require_api_token),
+):
+    """Recebe um vídeo e um briefing .md/.txt; transcreve com Whisper.cpp e renderiza MP4 com FFmpeg."""
+    if not video.filename or Path(video.filename).suffix.lower() not in {".mp4", ".mov", ".m4v", ".webm"}:
+        raise HTTPException(400, "Envie um vídeo MP4, MOV, M4V ou WEBM.")
+    brief = "Criar legendas dinâmicas em branco e amarelo, preservar o formato original e manter a fala natural."
+    if instructions is not None:
+        if instructions.filename and Path(instructions.filename).suffix.lower() not in {".md", ".txt"}:
+            raise HTTPException(400, "O arquivo de instruções deve ser .md ou .txt.")
+        raw_brief = await instructions.read(65537)
+        if len(raw_brief) > 65536:
+            raise HTTPException(413, "O arquivo de instruções deve ter no máximo 64 KB.")
+        brief = raw_brief.decode("utf-8", errors="replace").strip() or brief
+
+    workdir = Path(tempfile.mkdtemp(prefix="hitmo-edit-"))
+    try:
+        source = workdir / ("original" + Path(video.filename).suffix.lower())
+        total = 0
+        with source.open("wb") as out:
+            while chunk := await video.read(1024 * 1024):
+                total += len(chunk)
+                if total > MAX_VIDEO_BYTES:
+                    raise HTTPException(413, "Vídeo excede o limite configurado de 200 MB.")
+                out.write(chunk)
+
+        with source.open("rb") as handle:
+            upload = UploadFile(filename=video.filename, file=handle)
+            transcription = await transcribe_video(upload, _authorized=True)
+
+        output = workdir / "HITMO_VIDEO_AI_editado.mp4"
+        try:
+            edit_info = render_video(source, output, transcription["segments"], brief)
+        except subprocess.TimeoutExpired:
+            raise HTTPException(504, "A renderização excedeu 30 minutos.")
+        except RuntimeError as exc:
+            raise HTTPException(502, f"Falha ao renderizar o vídeo: {str(exc)[-900:]}")
+
+        headers = {
+            "X-HITMO-Captions": str(edit_info["captions"]),
+            "X-HITMO-Output-Bytes": str(edit_info["output_bytes"]),
+        }
+        return FileResponse(
+            path=output,
+            media_type="video/mp4",
+            filename="HITMO_VIDEO_AI_editado.mp4",
+            headers=headers,
+            background=BackgroundTask(shutil.rmtree, str(workdir), ignore_errors=True),
+        )
+    except Exception:
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise
