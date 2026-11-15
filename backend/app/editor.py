@@ -85,7 +85,8 @@ def render_video(
     command = [
         "ffmpeg", "-hide_banner", "-y", "-i", str(source),
         "-vf", ",".join(video_filters),
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+        "-threads", "1", "-filter_threads", "1", "-filter_complex_threads", "1",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "160k",
         "-movflags", "+faststart",
