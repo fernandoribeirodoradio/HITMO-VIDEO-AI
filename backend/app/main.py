@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="HITMO Voice Video Editor API",
     version="0.2.0",
-    description="Transcrição gratuita de vídeos com Whisper.cpp, legendas SRT e detecção inicial de comandos falados."
+    description="Transcrição gratuita em português com Vosk, legendas SRT e renderização local com FFmpeg."
 )
 
 app.add_middleware(
@@ -32,9 +32,7 @@ app.add_middleware(
 
 MAX_VIDEO_BYTES = int(os.getenv("MAX_VIDEO_BYTES", str(200 * 1024 * 1024)))
 API_TOKEN = os.getenv("HITMO_API_TOKEN", "")
-WHISPER_BINARY = os.getenv("WHISPER_BINARY", "/usr/local/bin/whisper-cli")
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "/opt/whisper/models/ggml-tiny-q5_1.bin")
-WHISPER_THREADS = os.getenv("WHISPER_THREADS", "2")
+VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "/opt/vosk-model-small-pt-0.3")
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -48,7 +46,7 @@ def require_api_token(credentials: HTTPAuthorizationCredentials | None = Depends
     return True
 
 
-TRANSCRIPTION_MODEL = "whisper.cpp/tiny-q5_1"
+TRANSCRIPTION_MODEL = "Vosk/vosk-model-small-pt-0.3"
 
 COMMANDS = [
     {
@@ -96,33 +94,44 @@ def detect_commands(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return found
 
 
-def parse_whisper_json(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
-    raw_segments = payload.get("transcription")
-    if not isinstance(raw_segments, list):
-        raise ValueError("O Whisper.cpp não retornou a lista de segmentos esperada.")
+def transcribe_audio_vosk(audio_path: Path) -> tuple[str, list[dict[str, Any]]]:
+    """Transcreve WAV mono 16 kHz com Vosk e devolve palavras com tempos reais."""
+    try:
+        import wave
+        from vosk import KaldiRecognizer, Model
+    except ImportError as exc:
+        raise RuntimeError("Biblioteca Vosk não instalada no servidor.") from exc
+
+    model_path = Path(VOSK_MODEL_PATH)
+    if not model_path.is_dir():
+        raise RuntimeError(f"Modelo Vosk não encontrado em {model_path}")
+
+    with wave.open(str(audio_path), "rb") as wav:
+        if wav.getnchannels() != 1 or wav.getframerate() != 16000 or wav.getsampwidth() != 2:
+            raise RuntimeError("O áudio precisa estar em WAV mono, 16 kHz e 16 bits.")
+        model = Model(str(model_path))
+        recognizer = KaldiRecognizer(model, wav.getframerate())
+        recognizer.SetWords(True)
+        words: list[dict[str, Any]] = []
+        while True:
+            data = wav.readframes(4000)
+            if not data:
+                break
+            if recognizer.AcceptWaveform(data):
+                result = json.loads(recognizer.Result())
+                words.extend(result.get("result", []))
+        final_result = json.loads(recognizer.FinalResult())
+        words.extend(final_result.get("result", []))
 
     segments = []
-    for item in raw_segments:
-        if not isinstance(item, dict):
+    for item in words:
+        word = str(item.get("word", "")).strip()
+        if not word:
             continue
-        offsets = item.get("offsets") or {}
-        start_ms = offsets.get("from")
-        end_ms = offsets.get("to")
-        if isinstance(start_ms, (int, float)) and isinstance(end_ms, (int, float)):
-            start, end = float(start_ms) / 1000, float(end_ms) / 1000
-        else:
-            timestamps = item.get("timestamps") or {}
-            def parse_timestamp(value: str) -> float:
-                match = re.match(r"(\d+):(\d+):(\d+)[,.](\d+)", value or "")
-                if not match:
-                    return 0.0
-                h, m, s, ms = map(int, match.groups())
-                return h * 3600 + m * 60 + s + ms / 1000
-            start = parse_timestamp(timestamps.get("from", ""))
-            end = parse_timestamp(timestamps.get("to", ""))
-        text = str(item.get("text", "")).strip()
-        if text:
-            segments.append({"start": max(0.0, start), "end": max(start, end), "text": text})
+        start = max(0.0, float(item.get("start", 0.0)))
+        end = max(start, float(item.get("end", start)))
+        if end > start:
+            segments.append({"start": start, "end": end, "text": word})
 
     full_text = " ".join(segment["text"] for segment in segments).strip()
     return full_text, segments
@@ -135,12 +144,11 @@ def root():
 
 @app.get("/health")
 def health():
-    binary_ok = Path(WHISPER_BINARY).is_file()
-    model_ok = Path(WHISPER_MODEL).is_file()
+    model_ok = Path(VOSK_MODEL_PATH).is_dir()
     return {
-        "status": "ok" if binary_ok and model_ok else "degraded",
+        "status": "ok" if model_ok else "degraded",
         "transcription_model": TRANSCRIPTION_MODEL,
-        "engine_available": binary_ok,
+        "engine_available": True,
         "model_available": model_ok,
     }
 
@@ -194,14 +202,13 @@ async def transcribe_video(
 ):
     if not video.filename or Path(video.filename).suffix.lower() not in {".mp4", ".mov", ".m4v", ".webm"}:
         raise HTTPException(400, "Envie um vídeo MP4, MOV, M4V ou WEBM.")
-    if not Path(WHISPER_BINARY).is_file() or not Path(WHISPER_MODEL).is_file():
-        raise HTTPException(503, "Motor gratuito de transcrição indisponível. Verifique o deploy do Whisper.cpp.")
+    if not Path(VOSK_MODEL_PATH).is_dir():
+        raise HTTPException(503, "Modelo gratuito Vosk não encontrado no servidor.")
 
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
         source = workdir / f"input{Path(video.filename).suffix.lower()}"
         audio = workdir / "audio.wav"
-        output_prefix = workdir / "transcript"
         total = 0
         with source.open("wb") as out:
             while chunk := await video.read(1024 * 1024):
@@ -218,26 +225,11 @@ async def transcribe_video(
         if proc.returncode != 0 or not audio.exists():
             raise HTTPException(422, "Não foi possível extrair o áudio do vídeo.")
 
-        command = [
-            WHISPER_BINARY, "-m", WHISPER_MODEL, "-f", str(audio),
-            "-l", "pt", "-t", WHISPER_THREADS, "-oj", "-of", str(output_prefix)
-        ]
         try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=1800)
-        except subprocess.TimeoutExpired:
-            raise HTTPException(504, "A transcrição demorou mais que 30 minutos e foi interrompida.")
-        if result.returncode != 0:
-            detail = (result.stderr or result.stdout or "Erro desconhecido")[-700:]
-            raise HTTPException(502, f"Falha no Whisper.cpp: {detail}")
+            text, segments = transcribe_audio_vosk(audio)
+        except Exception as exc:
+            raise HTTPException(502, f"Falha na transcrição Vosk: {str(exc)[:700]}")
 
-        json_path = output_prefix.with_suffix(".json")
-        if not json_path.is_file():
-            raise HTTPException(502, "O Whisper.cpp terminou sem gerar o arquivo JSON.")
-        try:
-            payload = json.loads(json_path.read_text(encoding="utf-8"))
-            text, segments = parse_whisper_json(payload)
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise HTTPException(502, f"Não foi possível interpretar a transcrição: {str(exc)[:250]}")
 
         if not segments:
             raise HTTPException(422, "Nenhuma fala foi identificada no vídeo.")
@@ -254,7 +246,7 @@ async def transcribe_video(
             "segments": segments,
             "subtitles_srt": srt,
             "voice_commands": detect_commands(segments),
-            "note": "Transcrição gratuita com Whisper.cpp. A renderização/inserção dos efeitos no MP4 ainda não está implementada."
+            "note": "Transcrição gratuita e local com Vosk; os tempos são estimados por palavra pelo reconhecedor."
         }
 
 
@@ -271,7 +263,7 @@ async def edit_video(
     instructions: UploadFile | None = File(default=None),
     _authorized: bool = Depends(require_api_token),
 ):
-    """Recebe um vídeo e um briefing .md/.txt; transcreve com Whisper.cpp e renderiza MP4 com FFmpeg."""
+    """Recebe vídeo e briefing .md/.txt; transcreve com Vosk e renderiza MP4 com FFmpeg."""
     if not video.filename or Path(video.filename).suffix.lower() not in {".mp4", ".mov", ".m4v", ".webm"}:
         raise HTTPException(400, "Envie um vídeo MP4, MOV, M4V ou WEBM.")
     brief = "Criar legendas dinâmicas em branco e amarelo, preservar o formato original e manter a fala natural."
