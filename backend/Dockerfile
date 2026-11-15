@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY --from=whisper-builder /opt/whisper-install /opt/whisper-install
 COPY --from=whisper-builder /opt/whisper/models /opt/whisper/models
-RUN find /opt/whisper-install -type f -name 'lib*.so*' -exec cp -f {} /usr/local/lib/ \\; && ldconfig && test -x /opt/whisper-install/bin/whisper-cli && test -s /opt/whisper/models/ggml-tiny-q5_1.bin && ldd /opt/whisper-install/bin/whisper-cli | tee /tmp/whisper-ldd && ! grep -q 'not found' /tmp/whisper-ldd
+RUN find /opt/whisper-install -type f -name 'lib*.so*' -exec cp -f {} /usr/local/lib/ + && ldconfig && test -x /opt/whisper-install/bin/whisper-cli && test -s /opt/whisper/models/ggml-tiny-q5_1.bin && ldd /opt/whisper-install/bin/whisper-cli | tee /tmp/whisper-ldd && ! grep -q 'not found' /tmp/whisper-ldd
 
 COPY app ./app
 
