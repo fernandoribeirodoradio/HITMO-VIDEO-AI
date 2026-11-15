@@ -1,20 +1,27 @@
 # HITMO VIDEO AI
 
-Projeto Android inicial do HITMO VIDEO AI.
+Editor pessoal de vídeo com processamento local/gratuito.
 
-## Voice Video Editor API (experimental)
+## O que existe nesta versão
+- Whisper.cpp para transcrição em português com timestamps.
+- Geração de legendas ASS animadas estilo karaoke.
+- Endpoint `POST /v1/edit`: recebe um vídeo e um briefing `.md` ou `.txt`, renderiza e devolve MP4.
+- FFmpeg para composição e exportação H.264/AAC.
+- Arquivo de comportamento do agente: [HITMO-AGENT.md](HITMO-AGENT.md).
+- Modelo de briefing por vídeo: [HITMO-BRIEF.md](HITMO-BRIEF.md).
 
-Backend inicial disponível em `backend/`:
-- recebe vídeo MP4/MOV/M4V/WEBM;
-- extrai o áudio com FFmpeg;
-- transcreve em português com timestamps usando Whisper;
-- gera legendas SRT;
-- detecta frases de comando cadastradas e devolve sugestões com tempo de entrada.
+## Deploy do backend
+No Render, use:
+- Branch: `feature/voice-editor-api`
+- Root Directory: `backend`
+- Runtime: Docker
+- Dockerfile: `Dockerfile`
+- Health Check Path: `/health`
+- Segredo: `HITMO_API_TOKEN`
 
-**Estado desta entrega:** transcrição e detecção de comandos implementadas no código. A inserção de imagens/animações e a renderização/exportação do MP4 editado ainda não estão implementadas. O serviço também ainda precisa ser publicado e configurado com uma chave OpenAI API.
+Não é necessária chave paga da API OpenAI/GPT.
 
-## Deploy
+## Limitações da primeira versão de edição
+A primeira versão aplica legendas animadas, zoom discreto e redução de ruído quando explicitamente pedidos no briefing. Cortes inteligentes de silêncio, análise semântica de imagem, troca real de câmera e inserção automática de imagens/B-roll ainda estão em desenvolvimento.
 
-O `render.yaml` prepara o serviço no Render. Conecte o repositório, selecione a branch `feature/voice-editor-api`, configure o segredo `OPENAI_API_KEY` no painel e faça o deploy. Valide a URL pública em `/health`.
-
-Documentação local e teste: consulte `backend/README.md` e `/docs`.
+Consulte [backend/README.md](backend/README.md) para detalhes e teste.
