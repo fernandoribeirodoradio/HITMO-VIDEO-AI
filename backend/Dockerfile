@@ -36,6 +36,6 @@ COPY app ./app
 
 ENV PORT=8000
 ENV WHISPER_BINARY=/opt/whisper-install/bin/whisper-cli
-ENV WHISPER_MODEL=/opt/whisper/models/ggml-tiny-q5_1.bin
+ENV WHISPER_MODEL=/opt/whisper/models/ggml-tiny-q5_1.bin\nENV LD_LIBRARY_PATH=/usr/local/lib
 EXPOSE 8000
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
