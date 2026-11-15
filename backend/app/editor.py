@@ -66,12 +66,20 @@ def render_video(
     ass_path = destination.with_suffix(".ass")
     build_ass(segments, ass_path)
 
-    normalized = instructions.casefold()
+    normalized = " ".join(instructions.casefold().split())
     video_filters = [f"subtitles={ass_path.as_posix()}"]
-    if any(term in normalized for term in ("zoom", "aproxima", "dinâmic", "dinamic")):
+    zoom_requested = any(term in normalized for term in (
+        "zoom: sim", "zoom = sim", "aplique zoom", "quero zoom",
+        "adicione zoom", "aproximacao de camera", "aproximação de câmera",
+    ))
+    if zoom_requested:
         video_filters.insert(0, "scale=iw*1.08:ih*1.08,crop=iw/1.08:ih/1.08")
     audio_filters = []
-    if any(term in normalized for term in ("ruído", "ruido", "limpe o áudio", "limpar áudio", "limpar audio")):
+    noise_requested = any(term in normalized for term in (
+        "reduza o ruido", "reduza o ruído", "remova o ruido", "remova o ruído",
+        "limpe o audio", "limpe o áudio", "limpar audio: sim", "limpar áudio: sim",
+    ))
+    if noise_requested:
         audio_filters.append("afftdn=nf=-25")
 
     command = [
@@ -92,7 +100,7 @@ def render_video(
     return {
         "output_bytes": destination.stat().st_size,
         "captions": len(segments),
-        "zoom_applied": bool(any(term in normalized for term in ("zoom", "aproxima", "dinâmic", "dinamic"))),
-        "noise_reduction_applied": bool(audio_filters),
+        "zoom_applied": zoom_requested,
+        "noise_reduction_applied": noise_requested,
         "note": "Primeira versão: legendas ASS animadas e efeitos básicos por instrução. Cortes inteligentes de silêncio, análise visual semântica e overlays gerados serão adicionados nas próximas etapas."
     }
