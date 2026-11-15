@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: hitmo-voice-video-editor
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: HITMO_API_TOKEN
+        sync: false
+      - key: MAX_VIDEO_BYTES
+        value: "209715200"
+      - key: WHISPER_THREADS
+        value: "2"
