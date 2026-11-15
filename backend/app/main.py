@@ -1,4 +1,6 @@
 import io
+import gc
+import logging
 import json
 import os
 import re
@@ -15,6 +17,8 @@ from pydantic import BaseModel
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
+
+logger = logging.getLogger("hitmo")
 
 app = FastAPI(
     title="HITMO Voice Video Editor API",
@@ -134,6 +138,9 @@ def transcribe_audio_vosk(audio_path: Path) -> tuple[str, list[dict[str, Any]]]:
             segments.append({"start": start, "end": end, "text": word})
 
     full_text = " ".join(segment["text"] for segment in segments).strip()
+    del recognizer
+    del model
+    gc.collect()
     return full_text, segments
 
 
@@ -276,6 +283,7 @@ async def edit_video(
         brief = raw_brief.decode("utf-8", errors="replace").strip() or brief
 
     workdir = Path(tempfile.mkdtemp(prefix="hitmo-edit-"))
+    logger.info("edit_started filename=%s", video.filename)
     try:
         source = workdir / ("original" + Path(video.filename).suffix.lower())
         total = 0
@@ -289,10 +297,14 @@ async def edit_video(
         with source.open("rb") as handle:
             upload = UploadFile(filename=video.filename, file=handle)
             transcription = await transcribe_video(upload, _authorized=True)
+        logger.info("edit_transcription_complete words=%d", len(transcription.get("segments", [])))
+        gc.collect()
 
         output = workdir / "HITMO_VIDEO_AI_editado.mp4"
         try:
+            logger.info("edit_render_started")
             edit_info = render_video(source, output, transcription["segments"], brief)
+            logger.info("edit_render_complete output_bytes=%d", edit_info.get("output_bytes", 0))
         except subprocess.TimeoutExpired:
             raise HTTPException(504, "A renderização excedeu 30 minutos.")
         except RuntimeError as exc:
@@ -310,5 +322,6 @@ async def edit_video(
             background=BackgroundTask(shutil.rmtree, str(workdir), ignore_errors=True),
         )
     except Exception:
+        logger.exception("edit_failed")
         shutil.rmtree(workdir, ignore_errors=True)
         raise
