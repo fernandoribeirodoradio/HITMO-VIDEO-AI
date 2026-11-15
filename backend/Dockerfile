@@ -18,7 +18,7 @@ RUN git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git /opt/whisper
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg libstdc++6 libgomp1 ca-certificates \
+    ffmpeg libass9 fonts-dejavu-core libstdc++6 libgomp1 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
