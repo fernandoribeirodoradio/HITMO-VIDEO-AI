@@ -99,49 +99,31 @@ def detect_commands(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def transcribe_audio_vosk(audio_path: Path) -> tuple[str, list[dict[str, Any]]]:
-    """Transcreve WAV mono 16 kHz com Vosk e devolve palavras com tempos reais."""
+    """Executa o Vosk em processo isolado para liberar toda a memória nativa ao terminar."""
+    worker = Path(__file__).with_name("vosk_worker.py")
+    env = os.environ.copy()
+    env.update({
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "KALDI_NUM_THREADS": "1",
+    })
     try:
-        import wave
-        from vosk import KaldiRecognizer, Model
-    except ImportError as exc:
-        raise RuntimeError("Biblioteca Vosk não instalada no servidor.") from exc
-
-    model_path = Path(VOSK_MODEL_PATH)
-    if not model_path.is_dir():
-        raise RuntimeError(f"Modelo Vosk não encontrado em {model_path}")
-
-    with wave.open(str(audio_path), "rb") as wav:
-        if wav.getnchannels() != 1 or wav.getframerate() != 16000 or wav.getsampwidth() != 2:
-            raise RuntimeError("O áudio precisa estar em WAV mono, 16 kHz e 16 bits.")
-        model = Model(str(model_path))
-        recognizer = KaldiRecognizer(model, wav.getframerate())
-        recognizer.SetWords(True)
-        words: list[dict[str, Any]] = []
-        while True:
-            data = wav.readframes(4000)
-            if not data:
-                break
-            if recognizer.AcceptWaveform(data):
-                result = json.loads(recognizer.Result())
-                words.extend(result.get("result", []))
-        final_result = json.loads(recognizer.FinalResult())
-        words.extend(final_result.get("result", []))
-
-    segments = []
-    for item in words:
-        word = str(item.get("word", "")).strip()
-        if not word:
-            continue
-        start = max(0.0, float(item.get("start", 0.0)))
-        end = max(start, float(item.get("end", start)))
-        if end > start:
-            segments.append({"start": start, "end": end, "text": word})
-
-    full_text = " ".join(segment["text"] for segment in segments).strip()
-    del recognizer
-    del model
-    gc.collect()
-    return full_text, segments
+        proc = subprocess.run(
+            [os.sys.executable, str(worker), str(audio_path), VOSK_MODEL_PATH],
+            capture_output=True, text=True, timeout=900, env=env,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("A transcrição Vosk excedeu 15 minutos.")
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "Falha no processo Vosk")[-1000:]
+        raise RuntimeError(detail)
+    try:
+        result = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("O processo Vosk retornou uma resposta inválida.") from exc
+    return str(result.get("text", "")), list(result.get("segments", []))
 
 
 @app.get("/")
